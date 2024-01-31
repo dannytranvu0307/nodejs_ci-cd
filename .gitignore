@@ -48,6 +48,6 @@ typings/
 # Output of 'npm pack'
 *.tgz
 
-# Docker
-.dockerignore
-app/build
+# # Docker
+# .dockerignore
+# app/build
