@@ -1,0 +1,93 @@
+// application A 
+const express = require('express');
+const oauth2orize = require('oauth2orize');
+const passport = require('passport');
+const login = require('connect-ensure-login');
+const bodyParser = require('body-parser');
+const session = require('express-session');
+
+const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(session({ secret: 'your-secret-key', resave: true, saveUninitialized: true }));
+app.use(passport.initialize());
+app.use(passport.session());
+
+const server = oauth2orize.createServer();
+
+// Database to store clients and tokens (In real-world scenario, you would use a database like MongoDB or PostgreSQL)
+const clients = [{ id: '1', secret: 'clientsecret', redirectUri: 'http://localhost:3001/auth/callback' }];
+const tokens = [];
+
+// Serialize/deserialize user (you need to implement these functions)
+passport.serializeUser((user, done) => done(null, user.id));
+passport.deserializeUser((id, done) => done(null, { id }));
+
+// Local authentication strategy (you can replace this with your own user authentication)
+passport.use(require('./your-authentication-strategy'));
+
+// Authorization endpoint
+app.get('/auth',
+  login.ensureLoggedIn(),
+  server.authorization((clientID, redirectURI, done) => {
+    const client = clients.find(c => c.id === clientID && c.redirectUri === redirectURI);
+    if (!client) return done(null, false);
+    return done(null, client, redirectURI);
+  }),
+  (req, res) => res.render('dialog', { transactionID: req.oauth2.transactionID, user: req.user, client: req.oauth2.client })
+);
+
+// Decision endpoint
+app.post('/auth/decision',
+  login.ensureLoggedIn(),
+  server.decision((req, done) => done(null, { scope: req.oauth2.req.scope }))
+);
+
+// Token endpoint
+app.post('/auth/token',
+  passport.authenticate(['oauth2-client-password'], { session: false }),
+  server.token(),
+  server.errorHandler()
+);
+
+app.listen(3000, () => console.log('Authorization Server is running on http://localhost:3000'));
+
+
+//application B
+// app-b.js
+const express = require('express');
+const request = require('request');
+const bodyParser = require('body-parser');
+
+const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Verify token function
+function verifyToken(token, callback) {
+  // Send a request to the Authorization Server to verify the token
+  request.post({
+    url: 'http://localhost:3000/auth/token',
+    form: {
+      token: token,
+      client_id: '1',
+      client_secret: 'clientsecret',
+    },
+  }, (error, response, body) => {
+    if (error) return callback(error, false);
+    const result = JSON.parse(body);
+    if (result.error) return callback(null, false);
+    return callback(null, true);
+  });
+}
+
+// Protected resource
+app.get('/protected-resource', (req, res) => {
+  const token = req.headers.authorization.split(' ')[1];
+  verifyToken(token, (error, valid) => {
+    if (error || !valid) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    return res.json({ message: 'This is a protected resource.' });
+  });
+});
+
+app.listen(3001, () => console.log('Resource Server is running on http://localhost:3001'));
